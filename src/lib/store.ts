@@ -1,95 +1,145 @@
-// 本地 JSON 文件存储 —— MVP 阶段使用文件系统代替数据库
-// 后续可迁移到 Supabase/数据库
+// Supabase 存储层
+// 替换原有的 JSON 文件存储，支持 Vercel Serverless 部署
 
-import { Tracker, Brief } from "./data";
-import { promises as fs } from "fs";
-import path from "path";
-
-const DATA_DIR = path.join(process.cwd(), "data");
-const TRACKERS_FILE = path.join(DATA_DIR, "trackers.json");
-const BRIEFS_FILE = path.join(DATA_DIR, "briefs.json");
-
-async function ensureDataDir() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-}
-
-async function readJSON<T>(filePath: string, defaultValue: T): Promise<T> {
-  try {
-    const content = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(content);
-  } catch {
-    return defaultValue;
-  }
-}
-
-async function writeJSON<T>(filePath: string, data: T): Promise<void> {
-  await ensureDataDir();
-  await fs.writeFile(filePath, JSON.stringify(data, null, 2), "utf-8");
-}
+import { supabase } from "./supabase";
+import type { Tracker, Brief, NewsItem } from "./data";
 
 // ========== Tracker CRUD ==========
+
 export async function getTrackers(): Promise<Tracker[]> {
-  return readJSON<Tracker[]>(TRACKERS_FILE, []);
+  const { data, error } = await supabase
+    .from("trackers")
+    .select("*")
+    .order("created_at", { ascending: false });
+
+  if (error || !data) return [];
+
+  return data.map((row) => ({
+    id: row.id,
+    name: row.name,
+    keywords: row.keywords,
+    sources: row.sources,
+    cronExpression: row.cron_expression,
+    cronLabel: row.cron_label,
+    email: row.email,
+    isActive: row.is_active,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
 }
 
 export async function getTracker(id: string): Promise<Tracker | undefined> {
-  const trackers = await getTrackers();
-  return trackers.find((t) => t.id === id);
+  const { data, error } = await supabase
+    .from("trackers")
+    .select("*")
+    .eq("id", id)
+    .single();
+
+  if (error || !data) return undefined;
+
+  return {
+    id: data.id,
+    name: data.name,
+    keywords: data.keywords,
+    sources: data.sources,
+    cronExpression: data.cron_expression,
+    cronLabel: data.cron_label,
+    email: data.email,
+    isActive: data.is_active,
+    createdAt: data.created_at,
+    updatedAt: data.updated_at,
+  };
 }
 
 export async function createTracker(
   data: Omit<Tracker, "id" | "createdAt" | "updatedAt">
 ): Promise<Tracker> {
-  const trackers = await getTrackers();
-  const tracker: Tracker = {
-    ...data,
-    id: `tracker-${Date.now()}`,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  trackers.push(tracker);
-  await writeJSON(TRACKERS_FILE, trackers);
-  return tracker;
+  const id = `tracker-${Date.now()}`;
+
+  const { error } = await supabase.from("trackers").insert({
+    id,
+    name: data.name,
+    keywords: data.keywords,
+    sources: data.sources,
+    cron_expression: data.cronExpression,
+    cron_label: data.cronLabel,
+    email: data.email,
+    is_active: data.isActive,
+  });
+
+  if (error) throw new Error(`Failed to create tracker: ${error.message}`);
+
+  const tracker = await getTracker(id);
+  return tracker!;
 }
 
 export async function updateTracker(
   id: string,
   data: Partial<Tracker>
 ): Promise<Tracker | undefined> {
-  const trackers = await getTrackers();
-  const index = trackers.findIndex((t) => t.id === id);
-  if (index === -1) return undefined;
+  const updateData: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
-  trackers[index] = {
-    ...trackers[index],
-    ...data,
-    id, // prevent id override
-    updatedAt: new Date().toISOString(),
-  };
-  await writeJSON(TRACKERS_FILE, trackers);
-  return trackers[index];
+  if (data.name !== undefined) updateData.name = data.name;
+  if (data.keywords !== undefined) updateData.keywords = data.keywords;
+  if (data.sources !== undefined) updateData.sources = data.sources;
+  if (data.cronExpression !== undefined) updateData.cron_expression = data.cronExpression;
+  if (data.cronLabel !== undefined) updateData.cron_label = data.cronLabel;
+  if (data.email !== undefined) updateData.email = data.email;
+  if (data.isActive !== undefined) updateData.is_active = data.isActive;
+
+  const { error } = await supabase
+    .from("trackers")
+    .update(updateData)
+    .eq("id", id);
+
+  if (error) throw new Error(`Failed to update tracker: ${error.message}`);
+
+  return getTracker(id);
 }
 
 export async function deleteTracker(id: string): Promise<boolean> {
-  const trackers = await getTrackers();
-  const filtered = trackers.filter((t) => t.id !== id);
-  if (filtered.length === trackers.length) return false;
-  await writeJSON(TRACKERS_FILE, filtered);
+  const { error } = await supabase.from("trackers").delete().eq("id", id);
+  if (error) return false;
   return true;
 }
 
 // ========== Briefs ==========
+
 export async function getBriefs(trackerId?: string): Promise<Brief[]> {
-  const all = await readJSON<Brief[]>(BRIEFS_FILE, []);
-  if (trackerId) return all.filter((b) => b.trackerId === trackerId);
-  return all.sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
+  let query = supabase
+    .from("briefs")
+    .select("*")
+    .order("generated_at", { ascending: false })
+    .limit(100);
+
+  if (trackerId) {
+    query = query.eq("tracker_id", trackerId);
+  }
+
+  const { data, error } = await query;
+  if (error || !data) return [];
+
+  return data.map((row) => ({
+    id: row.id,
+    trackerId: row.tracker_id,
+    trackerName: row.tracker_name,
+    items: (row.items || []) as NewsItem[],
+    summary: row.summary,
+    generatedAt: row.generated_at,
+  }));
 }
 
 export async function saveBrief(brief: Brief): Promise<Brief> {
-  const briefs = await getBriefs();
-  briefs.unshift(brief);
-  // 只保留最近100条
-  const trimmed = briefs.slice(0, 100);
-  await writeJSON(BRIEFS_FILE, trimmed);
+  const { error } = await supabase.from("briefs").insert({
+    id: brief.id,
+    tracker_id: brief.trackerId,
+    tracker_name: brief.trackerName,
+    items: brief.items,
+    summary: brief.summary,
+    item_count: brief.items.length,
+  });
+
+  if (error) throw new Error(`Failed to save brief: ${error.message}`);
+
   return brief;
 }

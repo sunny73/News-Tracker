@@ -46,9 +46,18 @@ import {
   type Brief,
 } from "@/lib/data";
 
+interface BriefSummary {
+  id: string;
+  trackerId: string;
+  trackerName: string;
+  summary: string;
+  itemCount: number;
+  generatedAt: string;
+}
+
 export function BriefClient() {
   const [trackers, setTrackers] = useState<Tracker[]>([]);
-  const [briefs, setBriefs] = useState<Brief[]>([]);
+  const [briefs, setBriefs] = useState<BriefSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState<string | null>(null);
 
@@ -421,7 +430,7 @@ export function BriefClient() {
             {/* Cron */}
             <div className="space-y-2">
               <Label>更新频率</Label>
-              <Select value={formCron} onValueChange={setFormCron}>
+              <Select value={formCron} onValueChange={(v) => v && setFormCron(v)}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
