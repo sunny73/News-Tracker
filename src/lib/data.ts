@@ -86,23 +86,37 @@ export async function fetchHotList(sourceId: string): Promise<NewsItem[]> {
   if (!apiType) return [];
 
   try {
-    const res = await fetch(
+    // 尝试多个热榜 API
+    const apis = [
+      `https://api-hot.imsyy.top/${apiType}`,
       `https://api.vvhan.com/api/hotlist/${apiType}`,
-      { next: { revalidate: 600 } } // 缓存10分钟
-    );
-    if (!res.ok) return [];
+    ];
 
-    const data = await res.json();
-    if (data.success !== true) return [];
+    for (const apiUrl of apis) {
+      try {
+        const res = await fetch(apiUrl, {
+          next: { revalidate: 600 },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok) continue;
 
-    return (data.data || []).map((item: any, index: number) => ({
-      id: `${sourceId}-${index}`,
-      title: item.title || "",
-      url: item.url || "",
-      source: sourceId,
-      hot: item.hot || "",
-      summary: item.desc || "",
-    }));
+        const data = await res.json();
+        const list = data.data || data.list || [];
+        if (!Array.isArray(list) || list.length === 0) continue;
+
+        return list.map((item: any, index: number) => ({
+          id: `${sourceId}-${index}`,
+          title: item.title || "",
+          url: item.url || item.link || "",
+          source: sourceId,
+          hot: item.hot || item.heat || "",
+          summary: item.desc || item.description || "",
+        }));
+      } catch {
+        continue;
+      }
+    }
+    return [];
   } catch {
     console.error(`Failed to fetch ${sourceId}`);
     return [];
